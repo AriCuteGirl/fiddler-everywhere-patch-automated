@@ -516,26 +516,31 @@ jobs:
             }
           }
 
-      - name: Patch main.js to main.original.js
+              - name: Patch main.js to main.original.js
         run: |
           $source_main = "FE/resources/app/out/main.js"
-          $main_content = Get-Content -Path $source_main -Raw
-
-          $new_main = "FE/resources/app/out/main.original.js"
-
-          $source_index = "msojocs-patch/server/index.js"
-          $index_content = Get-Content -Path $source_index -Raw
           
-          if ((Test-Path $source_main) -and (Test-Path $source_index)) {
-            Copy-Item -Path $source_main -Destination $new_main
-
-            $appended_content = $index_content + $main_content
-
-            Set-Content -Path $source_main -Value $appended_content
+          if (Test-Path $source_main) {
+            $main_content = Get-Content -Path $source_main -Raw
+            $new_main = "FE/resources/app/out/main.original.js"
+            $source_index = "msojocs-patch/server/index.js"
+            
+            if (Test-Path $source_index) {
+              $index_content = Get-Content -Path $source_index -Raw
+              Copy-Item -Path $source_main -Destination $new_main
+              $appended_content = $index_content + $main_content
+              Set-Content -Path $source_main -Value $appended_content
+              Write-Host "Successfully patched main.js"
+            } else {
+              Write-Host "WARNING: index.js (from server) not found"
+            }
           } else {
-            Write-Host "Source main.js or index.js (from server) not found"
+            Write-Host "WARNING: main.js not found at $source_main"
+            Write-Host "Searching for main.js in FE directory..."
+            Get-ChildItem -Recurse -Path "FE" -Filter "main.js" -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "Found: $($_.FullName)"
+            }
           }
-
       - name: Clean msojocs-patch
         run: |
           if (Test-Path msojocs-patch) {
