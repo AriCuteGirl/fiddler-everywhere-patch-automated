@@ -139,7 +139,7 @@ jobs:
         run: |
           $scrapedVersion = $env:SCRAPED_VERSION
           $compareVersion = "5.17.0"
-   
+    
           if (-not [string]::IsNullOrEmpty($scrapedVersion)) {
               if ([version]$scrapedVersion -ge [version]$compareVersion) {
                   echo "IS_COMPATIBLE_CONT=true" | Out-File -Append -FilePath $env:GITHUB_ENV
@@ -287,10 +287,8 @@ jobs:
     steps:
       - name: Build URL & Download
         run: |
-          # Retrieve the scraped version from the previous step
           $scrapedVersion = "${{ needs.scrape_fe_version.outputs.scraped_version }}"
           
-          # Check if the scraped version is available
           if (-not [string]::IsNullOrEmpty($scrapedVersion)) {
             $downloadUrl = "https://downloads.getfiddler.com/linux/fiddler-everywhere-$scrapedVersion.AppImage"
           
@@ -302,14 +300,32 @@ jobs:
             Write-Host "SCRAPED_VERSION is empty or not set"
             exit 1
           }
+        shell: pwsh
 
-      - name: Extract AppImage 
+      - name: Extract AppImage with proper mount
         run: |
           chmod +x ./FiddlerEverywhereSetup.AppImage
-          ./FiddlerEverywhereSetup.AppImage --appimage-extract
+          mkdir -p fe_app
+          ./FiddlerEverywhereSetup.AppImage --appimage-extract || true
+          
+          # Check what was extracted
+          if [ -d "squashfs-root" ]; then
+            cp -r squashfs-root/* fe_app/ 2>/dev/null || true
+            rm -rf squashfs-root
+          fi
+        shell: bash
 
-      - name: Rename squashfs-root to fe_app
-        run: mv squashfs-root fe_app
+      - name: Verify extraction
+        run: |
+          if [ ! -d "fe_app" ] || [ -z "$(find fe_app -type f -name '*.js' 2>/dev/null)" ]; then
+            echo "ERROR: AppImage extraction failed - no JS files found"
+            echo "Contents of fe_app:"
+            find fe_app -type f | head -20
+            exit 1
+          fi
+          echo "AppImage extracted successfully"
+          echo "Total files extracted: $(find fe_app -type f | wc -l)"
+        shell: bash
         
       - name: Upload Fiddler Everywhere Extracted folder as an artifact
         uses: actions/upload-artifact@v7
@@ -410,9 +426,12 @@ jobs:
 
       - name: List the contents of the downloaded artifacts
         run: |
-          Get-ChildItem -Recurse Yui-patch
-          Get-ChildItem -Recurse msojocs-patch
-          Get-ChildItem -Recurse fe_app
+          Write-Host "=== Yui-patch contents ==="
+          Get-ChildItem -Recurse Yui-patch -ErrorAction SilentlyContinue
+          Write-Host "`n=== msojocs-patch contents ==="
+          Get-ChildItem -Recurse msojocs-patch -ErrorAction SilentlyContinue
+          Write-Host "`n=== fe_app contents (first 50 files) ==="
+          Get-ChildItem -Recurse fe_app -ErrorAction SilentlyContinue | Select-Object -First 50
 
       - name: Rename main FE folder
         run: Rename-Item -Path "fe_app" -NewName "FE"
@@ -477,15 +496,25 @@ jobs:
       - name: Set user credentials
         run: |
           $source_json = "FE/resources/app/out/file/identity.getfiddler.com/oauth/token.json"
-          $main_content = Get-Content -Path $source_json -Raw | ConvertFrom-Json
+          
+          if (Test-Path $source_json) {
+            $main_content = Get-Content -Path $source_json -Raw | ConvertFrom-Json
 
-          $main_content.user_info.email = $env:PATCH_USER_EMAIL
-          $main_content.user_info.firstName = $env:PATCH_USER_FNAME
-          $main_content.user_info.lastName = $env:PATCH_USER_LNAME
-          $main_content.user_info.country = $env:PATCH_USER_COUNTRYCODE
-          $main_content.user_info.identities[0].providerName = $env:PATCH_USER_PROVIDER
+            $main_content.user_info.email = $env:PATCH_USER_EMAIL
+            $main_content.user_info.firstName = $env:PATCH_USER_FNAME
+            $main_content.user_info.lastName = $env:PATCH_USER_LNAME
+            $main_content.user_info.country = $env:PATCH_USER_COUNTRYCODE
+            $main_content.user_info.identities[0].providerName = $env:PATCH_USER_PROVIDER
 
-          $main_content | ConvertTo-Json -Depth 5 | Set-Content -Path $source_json
+            $main_content | ConvertTo-Json -Depth 5 | Set-Content -Path $source_json
+            Write-Host "User credentials set successfully in token.json"
+          } else {
+            Write-Host "WARNING: token.json not found at $source_json"
+            Write-Host "Searching for token.json in FE directory..."
+            Get-ChildItem -Recurse -Path "FE" -Filter "token.json" -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "Found: $($_.FullName)"
+            }
+          }
 
       - name: Patch main.js to main.original.js
         run: |
